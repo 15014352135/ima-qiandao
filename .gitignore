@@ -1,0 +1,6 @@
+credentials.json
+checkin.err
+result.json
+checkin.log
+__pycache__/
+*.pyc
