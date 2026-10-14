@@ -6,6 +6,7 @@ r"""从 ima 客户端本地存储提取「每日登录福利」签到所需凭�
     - Windows, 且本机已登录 ima 客户端 (ima.copilot)
     - 运行前请【完全退出 ima】(包括托盘图标), 否则 Cookie 库被占用无法读取
     - 需要 cryptography 库:  pip install cryptography -i https://mirrors.aliyun.com/pypi/simple/
+    - 凭证失效后重新提取: 先打开 ima 确认登录正常(如已被登出请重新扫码), 再完全退出后运行
 
 用法:
     python extract_credentials.py                 # 使用默认路径
@@ -66,7 +67,13 @@ def load_aes_key(user_data_dir):
 
 def read_cookies(db_path, aes_key):
     """返回 {name: value}；db 只读复制一份再解析, 避免文件锁冲突。"""
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    except ImportError:
+        sys.exit(
+            "[错误] 缺少 cryptography 库, 请先安装:\n"
+            "    pip install cryptography -i https://mirrors.aliyun.com/pypi/simple/"
+        )
 
     if not db_path.exists():
         return {}
@@ -114,6 +121,9 @@ def main():
                         help="ima 的 User Data 目录 (默认 %%LOCALAPPDATA%%\\ima.copilot\\User Data)")
     args = parser.parse_args()
 
+    if sys.platform != "win32":
+        sys.exit("[错误] 本脚本仅支持 Windows(需要读取 ima 客户端并使用 DPAPI 解密)。")
+
     user_data = Path(args.profile_dir)
     if not user_data.exists():
         sys.exit("[错误] 目录不存在: %s" % user_data)
@@ -124,7 +134,7 @@ def main():
     print("[2/3] 解密 Cookie 库...")
     cookies = {}
     # 主库 + 扩展库都扫一遍, 兼容 ima 版本差异
-    for rel in ("Default/Extension Cookies", "Default/Network/Cookies"):
+    for rel in ("Default/Extension Cookies", "Default/Network/Cookies", "Default/Cookies"):
         found = read_cookies(user_data / rel, aes_key)
         if found:
             cookies.update(found)
@@ -133,7 +143,10 @@ def main():
     missing = [name for name in WANTED if name not in cookies]
     if "IMA-TOKEN" in missing and "IMA-REFRESH-TOKEN" in missing:
         sys.exit(
-            "[错误] 未找到登录凭证。请确认 ima 已登录, 且提取时已完全退出 ima。"
+            "[错误] 未找到登录凭证。请确认:\n"
+            "  1) ima 客户端已在本机登录;\n"
+            "  2) 提取时已【完全退出】ima;\n"
+            "  3) 若因凭证失效而重新提取, 请先打开 ima 确认登录正常(必要时重新扫码)。"
         )
 
     print("[3/3] 写入 credentials.json ...")
