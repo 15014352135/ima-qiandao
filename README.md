@@ -1,25 +1,14 @@
-# ima-qiandao —— 真正全自动的 ima 算力签到方案
+# ima-qiandao —— ima 每日算力自动签到
 
-无需抓包、无需安装 ima 客户端，微信扫码一次，GitHub Actions 每天自动领取「每日登录福利」算力。
+ima（ima.copilot）「每日登录福利」自动领取：GitHub Actions 每天定时签到，部署全程只需扫码一次，之后零人工。
 
-ima 的登录凭证并不适合传统签到脚本：
+## 特点
 
-```plaintext
-抓包获取 Token → 配置环境变量 → 定时签到
-```
-
-它的 access token 只有 2 小时寿命；长期凭证（refresh token）没有账号密码通道可以续期，登录唯一方式是微信扫码——传统「维护一个长期 Token」的路在 ima 这里走不通。
-
-ima-qiandao 就是为了解决这个问题而诞生的：把人工压缩到**一次扫码**，之后的凭证续期、每日签到、失效恢复全部自动完成。
-
-## 核心特点
-
-- 真正全自动：部署后每天 09:07 / 21:07 自动签到，零人工
-- 凭证自动续期：2 小时短期票由脚本自动刷新，无需干预
-- 零抓包、零客户端：扫码授权即可，不依赖 ima 桌面端
-- 凭证不进仓库：持久化在 Actions Cache（外部不可下载），仓库保持 Public 也不泄露
-- 失效自恢复：凭证过期自动发二维码到邮箱，扫码 10 秒恢复
-- 失败告警：任务标红 + GitHub 邮件通知，不会悄悄断签
+- 每天自动签到，零人工；短期凭证自动续期，无需维护
+- 扫码授权即可，无需抓包、无需安装 ima 客户端
+- 凭证持久化在 Actions Cache，不进仓库，公开仓库也不泄露
+- 失效后自动发二维码到邮箱，扫码 10 秒恢复
+- 运行失败任务标红 + GitHub 邮件告警，不会悄悄断签
 
 > 用法：Fork 本仓库，按下面三步部署你自己的账号。不要使用任何别人提供的凭证文件。
 
@@ -61,15 +50,7 @@ Actions → 「ima 每日签到」→ Run workflow，日志出现「签到成功
 
 > Fork 的仓库需先在 Actions 页面点「I understand…Enable workflows」启用工作流。
 
-## 凭证存在哪？公开仓库会泄露吗？
-
-不会。凭证（`credentials.json`）**不进 git 仓库**，持久化在 GitHub Actions Cache 中——缓存不属于仓库内容，对外没有任何下载端点，仓库访客不可见（与 [Rainyun-Qiandao](https://github.com/LeapYa/Rainyun-Qiandao) 用 actions/cache 持久化 cookie 同款方案）。仓库保持 Public 也不泄露。
-
-## 凭证失效后怎么办
-
-凭证有效期由服务端控制。失效后「ima 每日签到」会失败并收到邮件提醒——重新执行**第 2 步**（同一条工作流）即可，无需其他操作。
-
-## 不想配邮箱？本地备选方案
+## 本地备选方案（不想配邮箱）
 
 在任意电脑上（无需安装 ima 客户端）：
 
@@ -89,3 +70,17 @@ python ima_recover.py
 | `ima_recover.py` | 扫码授权脚本（被 recover 工作流调用，也可本地运行） |
 | `extract_credentials.py` | 从 ima 客户端提取凭证（备选，Windows 专用） |
 | `history.jsonl` | 每日签到记录（自动提交） |
+
+## 常见问题
+
+**凭证存在哪？公开仓库会泄露吗？**
+
+不会。凭证（`credentials.json`）不进 git 仓库，持久化在 GitHub Actions Cache 中——缓存不属于仓库内容，对外没有任何下载端点，仓库访客不可见（与 [Rainyun-Qiandao](https://github.com/LeapYa/Rainyun-Qiandao) 用 actions/cache 持久化 cookie 同款方案）。
+
+**为什么必须扫码？不能像别的签到脚本一样维护一个长期 Token 吗？**
+
+ima 的 access token 只有 2 小时寿命，长期凭证（refresh token）又没有账号密码通道可以续期——登录唯一方式是微信扫码。所以「抓包拿一个长期 Token」的路在 ima 这里走不通，本项目把人工压缩到获取/恢复凭证时扫一次码，日常签到完全自动。
+
+**凭证失效后怎么办？**
+
+凭证有效期由服务端控制。失效后「ima 每日签到」会失败并收到邮件提醒——重新执行部署方法的**第 2 步**（同一条工作流）即可，无需其他操作。
