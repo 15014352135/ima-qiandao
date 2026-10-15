@@ -1,0 +1,47 @@
+name: ima 凭证恢复（扫码）
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 写入当前凭证
+        env:
+          IMA_CREDENTIALS: ${{ secrets.IMA_CREDENTIALS }}
+        run: |
+          if [ -z "$IMA_CREDENTIALS" ]; then
+            echo "::error::缺少 IMA_CREDENTIALS Secret"
+            exit 1
+          fi
+          printf '%s' "$IMA_CREDENTIALS" > credentials.json
+
+      - name: 生成二维码并发送邮件, 等待扫码
+        env:
+          IMA_SMTP_HOST: ${{ secrets.IMA_SMTP_HOST }}
+          IMA_SMTP_PORT: ${{ secrets.IMA_SMTP_PORT }}
+          IMA_SMTP_USER: ${{ secrets.IMA_SMTP_USER }}
+          IMA_SMTP_PASS: ${{ secrets.IMA_SMTP_PASS }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if [ -z "$IMA_SMTP_HOST" ] || [ -z "$GH_TOKEN" ]; then
+            echo "::error::需要配置 Secrets: IMA_SMTP_HOST / IMA_SMTP_PORT / IMA_SMTP_USER / IMA_SMTP_PASS, 以及 GH_PAT(有 repo 权限的 PAT, 用于更新 IMA_CREDENTIALS)"
+            exit 1
+          fi
+          python ima_recover.py --to "$IMA_SMTP_USER" --update-gh-secret LeapYa/ima-qiandao --timeout 720
+
+      - name: 验证新凭证
+        run: python ima_checkin.py --dry-run

@@ -1,6 +1,8 @@
 credentials.json
+credentials.json.bak
 checkin.err
 result.json
 checkin.log
+login_qr.png
 __pycache__/
 *.pyc

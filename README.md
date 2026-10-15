@@ -55,11 +55,33 @@ ima（ima.copilot）「每日登录福利」自动签到 —— 通过 GitHub Ac
 
 其他系统：macOS 版 ima 的存储格式不同，暂未支持。
 
+## 凭证失效自动恢复（扫码，约 1 分钟）
+
+refresh token 失效后**不需要**重新走一遍上面的手动提取——运行恢复脚本即可：
+
+```bash
+python ima_recover.py --to <你的邮箱>
+```
+
+流程：脚本检测到凭证失效 → 自动生成微信扫码登录二维码 → 发到你邮箱（或直接查看本地 `login_qr.png`）→ 手机微信扫码/长按识别图片并确认登录 → 脚本自动换取新凭证写回 `credentials.json`。人工参与只有"扫一下码"这 10 秒，其余全自动。
+
+- 邮件发送需配置环境变量：`IMA_SMTP_HOST` / `IMA_SMTP_PORT` / `IMA_SMTP_PASS` / `IMA_SMTP_USER`（QQ 邮箱在设置里生成「授权码」当密码）
+- 二维码约 5 分钟有效，过期自动换新重发（最多 3 次）
+- 恢复成功后旧凭证自动备份为 `credentials.json.bak`，新凭证会先做一次刷新验证再落盘
+
+**GitHub Actions 一键恢复**：Actions 页面运行「ima 凭证恢复（扫码）」工作流——它会生成二维码发邮件、等你扫码、成功后自动更新 `IMA_CREDENTIALS` Secret 并验证。需提前配置额外 Secrets：
+
+| Secret | 说明 |
+|---|---|
+| `IMA_SMTP_HOST` / `IMA_SMTP_PORT` / `IMA_SMTP_USER` / `IMA_SMTP_PASS` | 发件邮箱（二维码发到这个邮箱自己） |
+| `GH_PAT` | 有 repo 权限的 GitHub PAT（用于回写 `IMA_CREDENTIALS`；工作流的 GITHUB_TOKEN 无权写 Secret） |
+
 ## 文件说明
 
 | 文件 | 说明 |
 |---|---|
 | `ima_checkin.py` | 签到脚本（运行时读取同目录 `credentials.json`） |
+| `ima_recover.py` | 凭证失效自动恢复（生成二维码 → 邮件 → 轮询扫码 → 换新凭证） |
 | `extract_credentials.py` | 凭证提取器（在装了 ima 的 Windows 电脑上运行） |
 | `history.jsonl` | 每日运行结果（自动提交） |
 
