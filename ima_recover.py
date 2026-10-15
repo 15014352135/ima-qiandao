@@ -1,19 +1,23 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""ima 登录凭证自动恢复（refresh token / 大票失效时使用）
+"""ima 凭证获取 / 失效恢复（微信扫码授权, 不需要安装 ima 客户端）
+
+什么时候需要扫码:
+  - 日常自动签到: 不需要(凭证有效期内 refresh token 每次自动换新)
+  - 首次获取凭证 / refresh token(大票)失效: 扫一次码, 这是唯一的身份验证方式
 
 流程:
-  1. 先试旧凭证是否还能刷新(活着就直接退出, 加 --force 可跳过)
-  2. 失效 -> 通过微信开放平台 qrconnect 生成扫码登录二维码
+  1. 已有凭证且未失效 -> 直接退出(加 --force 可跳过检查)
+  2. 否则 -> 通过微信开放平台 qrconnect 生成扫码登录二维码
   3. 二维码保存为 login_qr.png; 可选通过 SMTP 邮件发送(--to)
   4. 轮询扫码结果(手机微信扫码/长按识别图片 -> 确认登录)
   5. 拿到 code 后调用 ima 登录接口换取新凭证, 写回 credentials.json
 
 用法:
-    python ima_recover.py                  # 默认: 检测 -> 生成二维码 -> 轮询(每张码最多5分钟,共10分钟) -> 恢复
+    python ima_recover.py                  # 首次获取 / 失效恢复, 同一条命令
     python ima_recover.py --to me@qq.com  # 额外把二维码发到邮箱(需配置 IMA_SMTP_* 环境变量)
     python ima_recover.py --dry-run        # 只生成二维码, 不轮询
-    python ima_recover.py --force          # 跳过"凭证还活着"检查, 强制走恢复流程
+    python ima_recover.py --force          # 跳过"凭证还活着"检查, 强制重新扫码
     python ima_recover.py --update-gh-secret --repo LeapYa/ima-qiandao
                                            # 成功后调用 gh CLI 更新 GitHub Secret(需 GH_TOKEN 环境变量)
 
@@ -25,6 +29,7 @@
 
 二维码有效期约 5 分钟, 过期会自动生成新的并(若配置了邮件)重发, 最多 3 次。
 恢复成功后新凭证写入 credentials.json(旧文件备份为 credentials.json.bak)。
+全新机器没有 credentials.json 也能跑: 设备 GUID 会自动生成并随新凭证一起落盘。
 """
 import argparse
 import json
@@ -81,11 +86,11 @@ def http_post_json(url, body, headers, timeout=30):
         return json.loads(resp.read().decode("utf-8"))
 
 
-def load_credentials():
-    if not CRED_FILE.exists():
-        sys.exit("[错误] 找不到 credentials.json, 无法读取设备信息。")
-    with open(CRED_FILE, "r", encoding="utf-8") as fp:
-        return json.load(fp)
+def gen_guid():
+    """生成 16 位数字设备 GUID(与 ima 客户端格式一致; 全新机器无 credentials.json 时使用)"""
+    import random
+
+    return str(random.randint(10**15, 10**16 - 1))
 
 
 def try_refresh(cred):
@@ -233,17 +238,27 @@ def update_gh_secret(repo):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ima 登录凭证自动恢复(扫码)")
+    parser = argparse.ArgumentParser(description="ima 凭证获取/恢复(微信扫码授权, 无需安装 ima 客户端)")
     parser.add_argument("--to", help="接收二维码的邮箱(需配置 IMA_SMTP_* 环境变量)")
     parser.add_argument("--dry-run", action="store_true", help="只生成二维码, 不轮询不写回")
-    parser.add_argument("--force", action="store_true", help="跳过'凭证还活着'检查")
+    parser.add_argument("--force", action="store_true", help="跳过'凭证还活着'检查, 强制重新扫码")
     parser.add_argument("--timeout", type=int, default=900, help="总轮询时限(秒), 默认 900")
+    parser.add_argument("--guid", help="设备 GUID(默认沿用 credentials.json 中的值, 没有则自动生成)")
     parser.add_argument("--update-gh-secret", metavar="REPO", help="成功后用 gh CLI 更新该仓库的 IMA_CREDENTIALS Secret")
     args = parser.parse_args()
 
-    cred = load_credentials()
+    if CRED_FILE.exists():
+        with open(CRED_FILE, "r", encoding="utf-8") as fp:
+            cred = json.load(fp)
+        has_old = bool(cred.get("refresh_token"))
+    else:
+        cred = {}
+        has_old = False
+        print("[提示] 未找到 credentials.json —— 全新初始化模式(不需要安装 ima 客户端)。")
 
-    if not args.force:
+    guid = args.guid or cred.get("ima_guid") or gen_guid()
+
+    if has_old and not args.force:
         print("[1/4] 检查旧凭证...")
         alive, why = try_refresh(cred)
         if alive:
@@ -251,7 +266,8 @@ def main():
             return 0
         print("      旧凭证已失效 (%s), 进入恢复流程。" % why)
     else:
-        print("[1/4] --force: 跳过检查。")
+        reason = "--force" if args.force else "无旧凭证"
+        print("[1/4] 跳过存活检查(%s)。" % reason)
 
     print("[2/4] 生成扫码登录二维码...")
     deadline = time.time() + args.timeout
@@ -283,7 +299,7 @@ def main():
 
     print("[4/4] 用 code 换取新凭证...")
     try:
-        new = login_exchange(code, cred.get("ima_guid", ""))
+        new = login_exchange(code, guid)
     except Exception as exc:
         sys.exit("[错误] %s" % exc)
     if not new.get("refresh_token"):
@@ -294,8 +310,8 @@ def main():
         shutil.copy2(CRED_FILE, backup)
     new_cred = {
         "ima_uid": new.get("ima_uid") or cred.get("ima_uid", ""),
-        "uid_type": str(new.get("id_type") or cred.get("uid_type", "")),
-        "ima_guid": cred.get("ima_guid", ""),
+        "uid_type": str(new.get("id_type") or cred.get("uid_type") or "2"),
+        "ima_guid": guid,
         "refresh_token": new["refresh_token"],
         "saved_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
