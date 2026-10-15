@@ -18,8 +18,6 @@
     python ima_recover.py --to me@qq.com  # 额外把二维码发到邮箱(需配置 IMA_SMTP_* 环境变量)
     python ima_recover.py --dry-run        # 只生成二维码, 不轮询
     python ima_recover.py --force          # 跳过"凭证还活着"检查, 强制重新扫码
-    python ima_recover.py --update-gh-secret --repo LeapYa/ima-qiandao
-                                           # 成功后调用 gh CLI 更新 GitHub Secret(需 GH_TOKEN 环境变量)
 
 邮件环境变量(使用 --to 时必需):
     IMA_SMTP_HOST  例如 smtp.qq.com
@@ -216,27 +214,6 @@ def send_mail(to, png_path):
     print("      二维码已发送至 %s" % to)
 
 
-def update_gh_secret(repo):
-    """通过 gh CLI 更新 IMA_CREDENTIALS Secret (需要 GH_TOKEN 环境变量)"""
-    import subprocess
-
-    env = dict(os.environ)
-    if not env.get("GH_TOKEN"):
-        print("      (未设置 GH_TOKEN, 跳过 GitHub Secret 更新)")
-        return False
-    r = subprocess.run(
-        ["gh", "secret", "set", "IMA_CREDENTIALS", "--repo", repo, "-R", repo],
-        stdin=open(CRED_FILE, "rb"),
-        env=env,
-        capture_output=True,
-    )
-    if r.returncode == 0:
-        print("      GitHub Secret IMA_CREDENTIALS 已更新 (%s)" % repo)
-        return True
-    print("      gh secret set 失败:", r.stderr.decode("utf-8", "replace")[:200])
-    return False
-
-
 def main():
     parser = argparse.ArgumentParser(description="ima 凭证获取/恢复(微信扫码授权, 无需安装 ima 客户端)")
     parser.add_argument("--to", help="接收二维码的邮箱(需配置 IMA_SMTP_* 环境变量)")
@@ -244,7 +221,6 @@ def main():
     parser.add_argument("--force", action="store_true", help="跳过'凭证还活着'检查, 强制重新扫码")
     parser.add_argument("--timeout", type=int, default=900, help="总轮询时限(秒), 默认 900")
     parser.add_argument("--guid", help="设备 GUID(默认沿用 credentials.json 中的值, 没有则自动生成)")
-    parser.add_argument("--update-gh-secret", metavar="REPO", help="成功后用 gh CLI 更新该仓库的 IMA_CREDENTIALS Secret")
     args = parser.parse_args()
 
     if CRED_FILE.exists():
@@ -325,8 +301,6 @@ def main():
     else:
         print("      [警告] 新凭证验证未通过: %s" % why)
 
-    if args.update_gh_secret:
-        update_gh_secret(args.update_gh_secret)
     print("恢复完成。")
     return 0
 

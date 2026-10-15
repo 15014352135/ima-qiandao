@@ -3,8 +3,9 @@ name: ima 凭证恢复（扫码）
 on:
   workflow_dispatch:
 
-permissions:
-  contents: read
+concurrency:
+  group: ima-recover
+  cancel-in-progress: false
 
 jobs:
   recover:
@@ -19,30 +20,35 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 写入当前凭证(如有)
-        env:
-          IMA_CREDENTIALS: ${{ secrets.IMA_CREDENTIALS }}
-        run: |
-          if [ -n "$IMA_CREDENTIALS" ]; then
-            printf '%s' "$IMA_CREDENTIALS" > credentials.json
-            echo "已加载现有凭证, 将先检查其是否有效。"
-          else
-            echo "未配置 IMA_CREDENTIALS —— 全新初始化模式, 扫码后将自动生成凭证。"
-          fi
+      # 恢复旧凭证（可能不存在 -> 全新初始化模式，扫码后自动生成）
+      - name: 恢复凭证缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: credentials.json
+          key: ima-cred-${{ github.run_id }}
+          restore-keys: |
+            ima-cred-
 
-      - name: 生成二维码并发送邮件, 等待扫码
+      - name: 生成二维码并发送邮件，等待扫码
         env:
           IMA_SMTP_HOST: ${{ secrets.IMA_SMTP_HOST }}
           IMA_SMTP_PORT: ${{ secrets.IMA_SMTP_PORT }}
           IMA_SMTP_USER: ${{ secrets.IMA_SMTP_USER }}
           IMA_SMTP_PASS: ${{ secrets.IMA_SMTP_PASS }}
-          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          if [ -z "$IMA_SMTP_HOST" ] || [ -z "$GH_TOKEN" ]; then
-            echo "::error::需要配置 Secrets: IMA_SMTP_HOST / IMA_SMTP_PORT / IMA_SMTP_USER / IMA_SMTP_PASS, 以及 GH_PAT(有 repo 权限的 PAT, 用于更新 IMA_CREDENTIALS)"
+          if [ -z "$IMA_SMTP_HOST" ] || [ -z "$IMA_SMTP_USER" ] || [ -z "$IMA_SMTP_PASS" ]; then
+            echo "::error::需要配置 Secrets: IMA_SMTP_HOST / IMA_SMTP_PORT / IMA_SMTP_USER / IMA_SMTP_PASS（二维码发到 IMA_SMTP_USER 邮箱）"
             exit 1
           fi
-          python ima_recover.py --to "$IMA_SMTP_USER" --update-gh-secret "${{ github.repository }}" --timeout 720
+          python ima_recover.py --to "$IMA_SMTP_USER" --timeout 720
 
-      - name: 验证新凭证
+      # 仅当凭证内容变化（本次扫码确实换了新凭证）时产生新缓存条目
+      - name: 保存凭证缓存
+        if: always() && hashFiles('credentials.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: credentials.json
+          key: ima-cred-${{ hashFiles('credentials.json') }}
+
+      - name: 验证签到状态
         run: python ima_checkin.py --dry-run

@@ -8,9 +8,6 @@ on:
     - cron: '7 13 * * *'
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 concurrency:
   group: ima-checkin
   cancel-in-progress: false
@@ -30,15 +27,31 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 写入凭证
+      # 凭证持久化在 Actions Cache 中：不属于 git 仓库、外部没有下载端点，
+      # 仓库保持公开也不泄露（与 Rainyun-Qiandao 缓存 cookie 同款方案）
+      - name: 恢复凭证缓存
+        uses: actions/cache/restore@v4
+        with:
+          path: credentials.json
+          key: ima-cred-${{ github.run_id }}
+          restore-keys: |
+            ima-cred-
+
+      - name: 兜底：从旧版 IMA_CREDENTIALS Secret 迁移凭证（如有）
         env:
           IMA_CREDENTIALS: ${{ secrets.IMA_CREDENTIALS }}
         run: |
-          if [ -z "$IMA_CREDENTIALS" ]; then
-            echo "::error::缺少 IMA_CREDENTIALS Secret，请先在仓库 Settings 中配置"
+          if [ ! -f credentials.json ] && [ -n "$IMA_CREDENTIALS" ]; then
+            printf '%s' "$IMA_CREDENTIALS" > credentials.json
+            echo "已从 IMA_CREDENTIALS Secret 迁移凭证，后续将持久化在 Actions 缓存中"
+          fi
+
+      - name: 检查凭证
+        run: |
+          if [ ! -f credentials.json ]; then
+            echo "::error::还没有凭证，请先运行「ima 凭证恢复（扫码）」工作流完成授权"
             exit 1
           fi
-          printf '%s' "$IMA_CREDENTIALS" > credentials.json
 
       - name: 执行签到
         id: run
@@ -54,15 +67,24 @@ jobs:
             line="{\"date\":\"$(date -u +%F)\",\"error\":\"${err:-run failed, see workflow log}\"}"
           fi
           echo "$line" >> history.jsonl
-          rm -f credentials.json checkin.err result.json
+          rm -f checkin.err result.json
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add history.jsonl
           git diff --cached --quiet || git commit -m "checkin $(date -u +%F)"
           git push
 
+      # 仅当凭证内容变化（如重新授权）时产生新缓存条目；内容不变则复用已有缓存
+      - name: 保存凭证缓存
+        if: always() && hashFiles('credentials.json') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: credentials.json
+          key: ima-cred-${{ hashFiles('credentials.json') }}
+        continue-on-error: true
+
       - name: 失败时标记任务失败
         if: steps.run.outcome == 'failure'
         run: |
-          echo "::error::签到执行失败，请检查上方日志；若为凭证失效，请更新 IMA_CREDENTIALS Secret"
+          echo "::error::签到执行失败，请检查上方日志；若为凭证失效，重新运行「ima 凭证恢复（扫码）」工作流即可"
           exit 1
