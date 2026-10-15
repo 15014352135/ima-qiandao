@@ -19,15 +19,16 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: 写入当前凭证
+      - name: 写入当前凭证(如有)
         env:
           IMA_CREDENTIALS: ${{ secrets.IMA_CREDENTIALS }}
         run: |
-          if [ -z "$IMA_CREDENTIALS" ]; then
-            echo "::error::缺少 IMA_CREDENTIALS Secret"
-            exit 1
+          if [ -n "$IMA_CREDENTIALS" ]; then
+            printf '%s' "$IMA_CREDENTIALS" > credentials.json
+            echo "已加载现有凭证, 将先检查其是否有效。"
+          else
+            echo "未配置 IMA_CREDENTIALS —— 全新初始化模式, 扫码后将自动生成凭证。"
           fi
-          printf '%s' "$IMA_CREDENTIALS" > credentials.json
 
       - name: 生成二维码并发送邮件, 等待扫码
         env:
@@ -41,7 +42,7 @@ jobs:
             echo "::error::需要配置 Secrets: IMA_SMTP_HOST / IMA_SMTP_PORT / IMA_SMTP_USER / IMA_SMTP_PASS, 以及 GH_PAT(有 repo 权限的 PAT, 用于更新 IMA_CREDENTIALS)"
             exit 1
           fi
-          python ima_recover.py --to "$IMA_SMTP_USER" --update-gh-secret LeapYa/ima-qiandao --timeout 720
+          python ima_recover.py --to "$IMA_SMTP_USER" --update-gh-secret "${{ github.repository }}" --timeout 720
 
       - name: 验证新凭证
         run: python ima_checkin.py --dry-run

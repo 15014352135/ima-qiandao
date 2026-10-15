@@ -1,86 +1,70 @@
 # ima-qiandao
 
-ima（ima.copilot）「每日登录福利」自动签到 —— 通过 GitHub Actions 每天自动领取算力。
+ima「每日登录福利」自动签到，GitHub Actions 每天自动领取算力。部署全程只需扫码一次，之后零人工。
 
-签到脚本为纯 Python 标准库实现；登录凭证只存放在 GitHub Secrets（`IMA_CREDENTIALS`），不进入代码。
-
-> **想用这个仓库？** 把它复制到你自己的 GitHub 账号（Fork，或下载文件后新建仓库皆可），
-> 按下方流程准备**你自己账号**的凭证。永远不要使用别人提供的凭证文件——它等同于账号钥匙。
+> 用法：Fork 本仓库（或下载后新建同名仓库），按下面三步部署你自己的账号。不要使用任何别人提供的凭证文件。
 
 ## 部署方法
 
-> 全程只需扫码一次（第 1 步获取凭证时），之后每天自动签到、零人工。
+### 第 1 步：配置 Secrets
 
-### 第 1 步：获取凭证
+仓库 → Settings → Secrets and variables → Actions → New repository secret，逐个添加：
 
-**方式 A：扫码授权（推荐）** —— 无需安装 ima 客户端，任何电脑可跑
+| Secret | 值 |
+|---|---|
+| `IMA_SMTP_HOST` | SMTP 服务器，QQ 邮箱填 `smtp.qq.com` |
+| `IMA_SMTP_PORT` | `465` |
+| `IMA_SMTP_USER` | 你的邮箱（二维码会发到这里） |
+| `IMA_SMTP_PASS` | SMTP 授权码，不是邮箱密码（QQ 邮箱：设置 → 账号 → POP3/SMTP 服务 → 生成授权码） |
+| `GH_PAT` | GitHub Personal Access Token，勾选 `repo` 权限，用于把扫码得到的凭证回写进 Secret |
 
-```bash
-python ima_recover.py             # 生成二维码 login_qr.png → 微信扫码确认 → 自动写入 credentials.json
-python ima_recover.py --to <邮箱>  # 把二维码额外发到邮箱（需配置 IMA_SMTP_* 环境变量）
-```
+### 第 2 步：扫码授权
 
-- 没有任何文件也能跑（首次部署场景）：设备 GUID 自动生成并随新凭证落盘
-- 二维码约 5 分钟有效，过期自动换新重发（最多 3 次）
-- 邮件发送需配置 `IMA_SMTP_HOST` / `IMA_SMTP_PORT` / `IMA_SMTP_USER` / `IMA_SMTP_PASS`（QQ 邮箱用「授权码」）
-- 若之前已有凭证，旧文件自动备份为 `credentials.json.bak`；新凭证落盘前先做一次刷新验证
+Actions → 「ima 凭证恢复（扫码）」→ Run workflow：
 
-**方式 B：从 ima 客户端提取（备选）** —— 需要装了 ima 且已登录的 Windows 电脑
+1. 工作流生成微信登录二维码，发送到你的邮箱
+2. 手机打开邮件，长按二维码图片用微信识别（或保存图片后用微信「扫一扫 → 相册」选取）
+3. 在微信里确认登录
+4. 工作流自动换取凭证、回写 `IMA_CREDENTIALS` 并验证签到，全部绿勾即授权完成
 
-```bat
-:: 完全退出 ima（含托盘图标）后运行
-python extract_credentials.py
-```
+二维码 5 分钟有效，过期自动补发（最多 3 次）；错过了就重跑一次工作流。
 
-原理：本机解密 ima 内置浏览器的 Cookie 库（Chromium AES-256-GCM，密钥由 Windows DPAPI 保护），全程本地完成、不联网。
-
-### 第 2 步：配置 GitHub Secret
-
-仓库 → Settings → Secrets and variables → Actions → New repository secret
-
-- Name：`IMA_CREDENTIALS`
-- Value：`credentials.json` 的全部内容
-
-### 第 3 步：手动验证一次
+### 第 3 步：验证
 
 Actions → 「ima 每日签到」→ Run workflow，日志出现「签到成功」或「今天已签到」即部署完成。
 
 ### 部署完成后的行为
 
-- 每天北京时间 **09:07 / 21:07** 自动签到（双跑互为兜底；接口幂等，重复执行无害）
-- 每次结果追加到 `history.jsonl` 并自动提交——既留签到记录，也避免 GitHub 因 60 天无活动停用定时任务
-- 运行失败时任务标红，GitHub 发送失败通知邮件（不会悄悄断签）
+| 项目 | 说明 |
+|---|---|
+| 定时 | 每天北京时间 09:07 / 21:07 自动签到，双跑互为兜底（接口幂等，重复无害） |
+| 记录 | 每次结果追加到 `history.jsonl` 并自动提交，避免 60 天无活动被停用 |
+| 告警 | 运行失败任务标红，GitHub 发送失败邮件 |
+
+> Fork 的仓库需先在 Actions 页面点「I understand…Enable workflows」启用工作流。
 
 ## 凭证失效后怎么办
 
-凭证（refresh token）的有效期由服务端控制，过期后重新扫一次码即可，命令与第 1 步相同：
+凭证有效期由服务端控制。失效后「ima 每日签到」会失败并收到邮件提醒——重新执行**第 2 步**（同一条工作流）即可，无需其他操作。
+
+## 不想配邮箱？本地备选方案
+
+在任意电脑上（无需安装 ima 客户端）：
 
 ```bash
 python ima_recover.py
 ```
 
-也可以在 GitHub 上一键恢复：Actions → 「ima 凭证恢复（扫码）」→ Run workflow——生成二维码发到你邮箱、等你扫码、成功后自动回写 `IMA_CREDENTIALS` Secret 并验证签到。需提前配置额外 Secrets：
-
-| Secret | 说明 |
-|---|---|
-| `IMA_SMTP_HOST` / `IMA_SMTP_PORT` / `IMA_SMTP_USER` / `IMA_SMTP_PASS` | 发件邮箱（二维码发到这个邮箱自己） |
-| `GH_PAT` | 有 repo 权限的 GitHub PAT（回写 Secret 用；工作流的 GITHUB_TOKEN 无权写 Secret） |
-
-## 本地定时（可选）
-
-不用 GitHub Actions 也可以本地跑：`python ima_checkin.py`（`--dry-run` 只查状态 / `--json` 机器可读输出），配 Windows 计划任务或 crontab 定时即可。
+脚本在当前目录生成 `login_qr.png`，微信扫码后凭证写入 `credentials.json`，再手动把文件内容填进 `IMA_CREDENTIALS` Secret。装了 ima 客户端的 Windows 机器也可以用 `python extract_credentials.py` 直接提取，效果相同。
 
 ## 文件说明
 
 | 文件 | 说明 |
 |---|---|
-| `ima_checkin.py` | 签到脚本（运行时读取同目录 `credentials.json`） |
-| `ima_recover.py` | 凭证获取 / 失效恢复（扫码授权，无需 ima 客户端） |
-| `extract_credentials.py` | 凭证提取器（备选：从 ima 客户端本地存储提取，Windows 专用） |
-| `history.jsonl` | 每日运行结果（自动提交） |
+| `.github/workflows/checkin.yml` | 每日签到工作流 |
+| `.github/workflows/recover.yml` | 扫码授权 / 凭证恢复工作流 |
+| `ima_checkin.py` | 签到脚本（纯标准库） |
+| `ima_recover.py` | 扫码授权脚本（被 recover 工作流调用，也可本地运行） |
+| `extract_credentials.py` | 从 ima 客户端提取凭证（备选，Windows 专用） |
 
-## 说明
-
-- 仅供本人账号使用；请勿将 `credentials.json` 提交到仓库或分享给他人
-- GitHub 定时任务存在平台性延迟（数分钟到数十分钟），双时间点已做兜底
-- 若某天发现定时任务被停用：Actions 页面点「Enable workflow」重新启用即可
+凭证只存放在 GitHub Secrets，不进入代码；请勿提交或分享 `credentials.json`。
