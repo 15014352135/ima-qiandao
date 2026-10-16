@@ -2,6 +2,8 @@
 
 ima（ima.copilot）「每日登录福利」自动领取：GitHub Actions 每天定时签到，部署全程只需扫码一次，之后零人工。
 
+> **还没有 ima 账号？** [通过邀请链接注册](https://ima.qq.com/copilot-invite-reward-token/assist/V_5sR6LWxL2uVkAf86vMxQ) 可领 **500 算力新人福利**（邀请者也会获得 100 算力，活动至 2026-12-31）。
+
 ## 特点
 
 - 每天自动签到，零人工；短期凭证自动续期，无需维护
