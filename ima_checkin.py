@@ -15,13 +15,21 @@ import json
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 BASE_URL = "https://ima.qq.com"
 REFRESH_URL = BASE_URL + "/cgi-bin/auth_login/refresh"
 ACTIVITY_INFO_URL = BASE_URL + "/cgi-bin/daily_login_activity/get_activity_info"
 CHECK_IN_URL = BASE_URL + "/cgi-bin/daily_login_activity/check_in"
+
+# 固定按北京时间判断"今天/星期几"，不依赖机器或 CI 容器的系统时区。
+# 中国无夏令时，固定 UTC+8 即可，无需 tzdata。
+CST = timezone(timedelta(hours=8))
+
+
+def now_cst():
+    return datetime.now(CST)
 
 # 与 ima 内置浏览器一致的固定请求头(服务器不严格校验具体值)
 FROM_BROWSER_IMA = "1"
@@ -33,7 +41,21 @@ CHECKIN_TYPE_WEEKLY_BONUS = 2
 # 服务端状态枚举(来自页面 JS): 1=已过期 2=已领取 3=可领取 4=未解锁
 STATUS_CLAIMED = 2
 STATUS_AVAILABLE = 3
+STATUS_LOCKED = 4
 STATUS_TEXT = {0: "未知", 1: "已过期", 2: "已领取", 3: "可领取", 4: "未解锁"}
+
+BONUS_TITLE = "满签奖励"
+# 满签奖励在周日结算发放: 一周签到从周一开始, 第 7 天正好是周日
+BONUS_WEEKDAY = 6  # datetime.weekday(): 周一=0 ... 周日=6
+
+# 服务端业务码(实测 2026-10-19):
+#   1001 = week not fully claimed, dayN unclaimed  未满签
+#   1002 = today already checked in                今天已签过
+# 注意: 同一接口短时间内被拒多次后服务端直接回 HTTP 403 + 空 body,
+# 所以调用失败必须能接住, 不能让异常冒出去打断签到。
+CODE_OK = 0
+CODE_NOT_FULL_WEEK = 1001
+CODE_ALREADY_CHECKED_IN = 1002
 
 CRED_FILE = Path(__file__).resolve().with_name("credentials.json")
 
@@ -56,13 +78,31 @@ def http_post_json(url, body, headers, timeout=20):
     req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            raw = resp.read().decode("utf-8", "replace")
+            status = resp.status
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", "replace")
-        try:
-            return json.loads(raw)
-        except ValueError:
-            raise RuntimeError("HTTP %s: %s" % (exc.code, raw[:200])) from None
+        status = exc.code
+
+    # 服务端被连续拒绝后会返回 403 + 空 body, 这里统一转成可接住的结构,
+    # 不再抛异常——否则一次"试领失败"就能把整个签到任务打断。
+    if not raw.strip():
+        return {
+            "code": -1,
+            "msg": "HTTP %s 空响应(可能被限流, 稍后重试)" % status,
+            "http_status": status,
+        }
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        return {
+            "code": -1,
+            "msg": "HTTP %s 非 JSON 响应: %s" % (status, raw[:200]),
+            "http_status": status,
+        }
+    if isinstance(data, dict):
+        data.setdefault("http_status", status)
+    return data
 
 
 def load_credentials():
@@ -137,12 +177,19 @@ def find_item(info, top):
     return None
 
 
+def reward_of(resp):
+    """签到接口的奖励字段是 snake_case 的 reward_received。"""
+    if not isinstance(resp, dict):
+        return None
+    return resp.get("reward_received", resp.get("rewardReceived"))
+
+
 def week_summary(info):
     cells = []
     for item in info.get("infos") or []:
         top = item.get("top") or "?"
         status = item.get("status")
-        mark = {2: "已领", 3: "今天", 4: "未解锁"}.get(status, STATUS_TEXT.get(status, "?"))
+        mark = {2: "已领", 3: "可领", 4: "未解锁"}.get(status, STATUS_TEXT.get(status, "?"))
         cells.append("%s:%s" % (top, mark))
     return "  ".join(cells)
 
@@ -153,7 +200,7 @@ def main():
     parser.add_argument("--json", dest="as_json", action="store_true", help="输出一行 JSON")
     args = parser.parse_args()
 
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now = now_cst().strftime("%Y-%m-%d %H:%M:%S")
     cred = load_credentials()
 
     token = refresh_access_token(cred)
@@ -173,45 +220,88 @@ def main():
         "dry_run": args.dry_run,
         "checkin_performed": False,
         "checkin_result": None,
+        "weekly_bonus_status": None,
         "weekly_bonus_claimed": False,
         "checkin_days": info.get("checkin_days"),
         "total_reward_points": info.get("total_reward_points"),
     }
+    messages = []
 
+    # ---------- 1) 日常签到 ----------
     if today.get("status") == STATUS_AVAILABLE:
         if args.dry_run:
-            result["message"] = "今天可签到 (dry-run, 未执行)"
+            messages.append("今天可签到 (dry-run, 未执行)")
         else:
             resp = check_in(cookie, token, CHECKIN_TYPE_DAILY)
             result["checkin_performed"] = True
             result["checkin_result"] = resp
             if resp.get("code") == 0:
-                result["message"] = "签到成功, 获得 %s" % (
-                    resp.get("rewardReceived") or today.get("reward") or "奖励"
-                )
+                got = reward_of(resp)
+                messages.append("签到成功, 获得 %s算力" % got if got else "签到成功")
             else:
-                result["message"] = "签到返回 code=%s msg=%s" % (resp.get("code"), resp.get("msg"))
+                messages.append(
+                    "签到返回 code=%s msg=%s" % (resp.get("code"), resp.get("msg"))
+                )
+            # 第 7 天(周日)日签会在同一次请求里解锁「满签奖励」。
+            # 必须重新拉状态, 否则下面读到的是签到前的旧快照, 满签奖励还是「未解锁」。
+            info = get_activity_info(cookie, token)
     elif today.get("status") == STATUS_CLAIMED:
-        result["message"] = "今天已签到"
+        messages.append("今天已签到")
     else:
-        result["message"] = "今天不可签到 (status=%s)" % today.get("status")
+        messages.append("今天不可签到 (status=%s)" % today.get("status"))
 
-    # 满签奖励: 连续 7 天时可领, 顺手自动领取
-    bonus = find_item(info, "满签奖励")
-    if (
-        bonus is not None
-        and bonus.get("status") == STATUS_AVAILABLE
-        and not args.dry_run
-    ):
+    # ---------- 2) 满签奖励: 只有周日(第 7 天)签到完才试领一次 ----------
+    # 签到周期周一~周日, 满签奖励周日结算。非周日静默跳过: 不发请求、不打日志。
+    # 周日照常发一次 type=2, 并把服务端返回码全部接住。
+    bonus = find_item(info, BONUS_TITLE)
+    if bonus is not None:
+        result["weekly_bonus_status"] = bonus.get("status")
+
+    if now_cst().weekday() != BONUS_WEEKDAY:
+        pass  # 非周日: 静默跳过
+    elif args.dry_run:
+        if bonus is None:
+            messages.append("满签奖励: 接口未返回该条目, 活动可能已改版")
+        elif bonus.get("status") == STATUS_CLAIMED:
+            messages.append("满签奖励本期已领取")
+        elif bonus.get("status") == STATUS_AVAILABLE:
+            messages.append("满签奖励可领取 (dry-run, 未执行)")
+        else:
+            messages.append(
+                "满签奖励未解锁 (status=%s, 当前 %s 天)"
+                % (bonus.get("status"), info.get("checkin_days"))
+            )
+    else:
         resp = check_in(cookie, token, CHECKIN_TYPE_WEEKLY_BONUS)
-        result["weekly_bonus_claimed"] = resp.get("code") == 0
         result["weekly_bonus_result"] = resp
+        code = resp.get("code")
+        if code == CODE_OK:
+            got = reward_of(resp)
+            result["weekly_bonus_claimed"] = True
+            result["weekly_bonus_reward"] = got
+            messages.append("满签奖励已领取%s" % (" +%s算力" % got if got else ""))
+            info = get_activity_info(cookie, token)  # 刷新最终总数
+        elif code == CODE_NOT_FULL_WEEK:
+            # 周日但本周没签满, 属于正常情况
+            result["weekly_bonus_reason"] = "not_full_week"
+            messages.append(
+                "满签奖励未到条件 (%s, 当前 %s 天)"
+                % (resp.get("msg"), info.get("checkin_days"))
+            )
+        elif code == CODE_ALREADY_CHECKED_IN:
+            result["weekly_bonus_reason"] = "already_checked_in"
+            messages.append("满签奖励: 今天已签到, 无需重复")
+        else:
+            # 含 -1(HTTP 403/空响应/限流) 等未知情况: 只记录, 不影响签到结果
+            result["weekly_bonus_reason"] = "error"
+            messages.append(
+                "满签奖励试领异常 code=%s msg=%s" % (code, resp.get("msg"))
+            )
 
-    # 签到后刷新一次状态
-    if result["checkin_performed"]:
-        info = get_activity_info(cookie, token)
-        result["total_reward_points"] = info.get("total_reward_points")
-        result["checkin_days"] = info.get("checkin_days")
+    # ---------- 3) 汇总最终状态 ----------
+    result["checkin_days"] = info.get("checkin_days")
+    result["total_reward_points"] = info.get("total_reward_points")
+    result["message"] = " | ".join(messages) if messages else "无可执行动作"
 
     if args.as_json:
         print(json.dumps(result, ensure_ascii=False))
@@ -219,8 +309,12 @@ def main():
 
     print("[ima 每日签到] %s" % now)
     print("本周进度: %s" % week_summary(info))
-    print("累计: 已签到 %s 天, 共 %s 算力" % (info.get("checkin_days"), info.get("total_reward_points")))
-    print(result["message"])
+    print(
+        "累计: 已签到 %s 天, 共 %s 算力"
+        % (info.get("checkin_days"), info.get("total_reward_points"))
+    )
+    for line in messages:
+        print(line)
 
 
 if __name__ == "__main__":

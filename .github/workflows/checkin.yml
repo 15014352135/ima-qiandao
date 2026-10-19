@@ -2,10 +2,10 @@ name: ima 每日签到
 
 on:
   schedule:
-    # 北京时间 09:07 与 21:07（UTC 01:07 / 13:07）
-    # 双时间点互为兜底：GitHub 定时任务存在平台性延迟，接口幂等可安全重复执行
-    - cron: '7 1 * * *'
-    - cron: '7 13 * * *'
+    # 北京时间每天 07:00（UTC 23:00，即前一天 23 点）
+    # GitHub 定时任务有 1~4 小时平台延迟，07:00 触发可确保当天上午完成签到；
+    # 定时任务时区固定 UTC，不能写北京时间，必须换算成 UTC 23:00。
+    - cron: '0 23 * * *'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
+      # 仅用于 git 提交时间戳等 shell 侧行为；
+      # 脚本内部的"今天/星期几"已用固定 UTC+8 判断，不依赖本变量。
       TZ: Asia/Shanghai
     steps:
       - name: 检出仓库
