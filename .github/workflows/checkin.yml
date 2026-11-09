@@ -90,14 +90,8 @@ jobs:
           git diff --cached --quiet || git commit -m "checkin $(date -u +%F)"
           git push
 
-      # 仅当凭证内容变化（如重新授权）时产生新缓存条目；内容不变则复用已有缓存
-      - name: 保存凭证缓存
-        if: always() && hashFiles('credentials.json') != ''
-        uses: actions/cache/save@v4
-        with:
-          path: credentials.json
-          key: ima-cred-${{ hashFiles('credentials.json') }}
-        continue-on-error: true
+      # 凭证只在扫码授权时变化，签到流程不写回，因此这里不保存缓存
+      # （保存由 recover.yml 负责；在内容未变时重复保存只会产生无害但扰人的 warning）
 
       - name: 输出失败原因与恢复指引
         if: steps.run.outcome == 'failure'

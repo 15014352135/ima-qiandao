@@ -45,13 +45,14 @@ jobs:
           echo "二维码收件人: $MAIL_TO（发件账号: $IMA_SMTP_USER）"
           python ima_recover.py --to "$MAIL_TO" --timeout 720
 
-      # 仅当凭证内容变化（本次扫码确实换了新凭证）时产生新缓存条目
+      # 扫码成功才会写入新凭证，内容变化 -> 新缓存条目；若凭证本就有效(脚本直接退出)，缓存已存在，重复保存失败可忽略
       - name: 保存凭证缓存
         if: always() && hashFiles('credentials.json') != ''
         uses: actions/cache/save@v4
         with:
           path: credentials.json
           key: ima-cred-${{ hashFiles('credentials.json') }}
+        continue-on-error: true
 
       - name: 验证签到状态
         run: python ima_checkin.py --dry-run
