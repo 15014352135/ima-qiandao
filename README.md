@@ -67,6 +67,12 @@ python ima_recover.py
 
 脚本在当前目录生成 `login_qr.png`，微信扫码后凭证写入 `credentials.json`。GitHub 环境请把该文件内容存入 Actions Cache 或 Secret（勿提交进仓库）。装了 ima 客户端的 Windows 机器也可以用 `python extract_credentials.py` 直接提取，效果相同。
 
+配好 SMTP 后想先验证发信是否正常，用这一条（不生成二维码、不消耗扫码）：
+
+```bash
+python ima_recover.py --test-mail --to you@example.com
+```
+
 ## 文件说明
 
 | 文件 | 说明 |
