@@ -20,14 +20,17 @@ ima（ima.copilot）「每日登录福利」自动领取：GitHub Actions 每天
 
 ### 第 1 步：配置 SMTP Secrets
 
-仓库 → Settings → Secrets and variables → Actions → New repository secret，逐个添加（用于把登录二维码发到你邮箱）：
+仓库 → Settings → Secrets and variables → Actions → New repository secret，逐个添加（用于把登录二维码发到邮箱）：
 
 | Secret | 值 |
 |---|---|
-| `IMA_SMTP_HOST` | SMTP 服务器，QQ 邮箱填 `smtp.qq.com` |
-| `IMA_SMTP_PORT` | `465` |
-| `IMA_SMTP_USER` | 你的邮箱（二维码会发到这里） |
-| `IMA_SMTP_PASS` | SMTP 授权码，不是邮箱密码（QQ 邮箱：设置 → 账号 → POP3/SMTP 服务 → 生成授权码） |
+| `IMA_SMTP_HOST` | SMTP 服务器，QQ 邮箱填 `smtp.qq.com`，网易企业邮箱填 `smtphz.qiye.163.com`（华东）或 `smtp.qiye.163.com` |
+| `IMA_SMTP_PORT` | `465`（SSL） |
+| `IMA_SMTP_USER` | 发件邮箱（SMTP 认证账号） |
+| `IMA_SMTP_PASS` | SMTP 授权码，不是邮箱密码（QQ 邮箱：设置 → 账号 → POP3/SMTP 服务 → 生成授权码；网易企业邮箱：网页版设置 → 客户端设置 → 开启 SMTP 并生成授权码） |
+| `IMA_MAIL_TO` | 选填：二维码的收件邮箱。不填则发给 `IMA_SMTP_USER` 自己；填了就可以发件、收件用不同账号 |
+
+> 发件与收件分开时，`IMA_SMTP_USER` 配发件账号（含其认证授权码），`IMA_MAIL_TO` 配你想收二维码的邮箱——两者不必相同。
 
 ### 第 2 步：扫码授权
 

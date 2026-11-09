@@ -35,12 +35,15 @@ jobs:
           IMA_SMTP_PORT: ${{ secrets.IMA_SMTP_PORT }}
           IMA_SMTP_USER: ${{ secrets.IMA_SMTP_USER }}
           IMA_SMTP_PASS: ${{ secrets.IMA_SMTP_PASS }}
+          IMA_MAIL_TO: ${{ secrets.IMA_MAIL_TO }}
         run: |
           if [ -z "$IMA_SMTP_HOST" ] || [ -z "$IMA_SMTP_USER" ] || [ -z "$IMA_SMTP_PASS" ]; then
-            echo "::error::需要配置 Secrets: IMA_SMTP_HOST / IMA_SMTP_PORT / IMA_SMTP_USER / IMA_SMTP_PASS（二维码发到 IMA_SMTP_USER 邮箱）"
+            echo "::error::需要配置 Secrets: IMA_SMTP_HOST / IMA_SMTP_PORT / IMA_SMTP_USER / IMA_SMTP_PASS"
             exit 1
           fi
-          python ima_recover.py --to "$IMA_SMTP_USER" --timeout 720
+          MAIL_TO="${IMA_MAIL_TO:-$IMA_SMTP_USER}"
+          echo "二维码收件人: $MAIL_TO（发件账号: $IMA_SMTP_USER）"
+          python ima_recover.py --to "$MAIL_TO" --timeout 720
 
       # 仅当凭证内容变化（本次扫码确实换了新凭证）时产生新缓存条目
       - name: 保存凭证缓存

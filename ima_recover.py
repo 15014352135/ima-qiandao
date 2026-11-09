@@ -216,7 +216,11 @@ def send_mail(to, png_path):
 
 def main():
     parser = argparse.ArgumentParser(description="ima 凭证获取/恢复(微信扫码授权, 无需安装 ima 客户端)")
-    parser.add_argument("--to", help="接收二维码的邮箱(需配置 IMA_SMTP_* 环境变量)")
+    parser.add_argument(
+        "--to",
+        default=os.environ.get("IMA_MAIL_TO") or os.environ.get("IMA_SMTP_USER") or None,
+        help="接收二维码的邮箱；默认取环境变量 IMA_MAIL_TO，未配置则发给 IMA_SMTP_USER 自己",
+    )
     parser.add_argument("--dry-run", action="store_true", help="只生成二维码, 不轮询不写回")
     parser.add_argument("--force", action="store_true", help="跳过'凭证还活着'检查, 强制重新扫码")
     parser.add_argument("--timeout", type=int, default=900, help="总轮询时限(秒), 默认 900")
