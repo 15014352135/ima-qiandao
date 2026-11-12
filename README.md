@@ -20,14 +20,17 @@ ima（ima.copilot）「每日登录福利」自动领取：GitHub Actions 每天
 
 ### 第 1 步：配置 SMTP Secrets
 
-仓库 → Settings → Secrets and variables → Actions → New repository secret，逐个添加（用于把登录二维码发到你邮箱）：
+仓库 → Settings → Secrets and variables → Actions → New repository secret，逐个添加（用于把登录二维码发到邮箱）：
 
 | Secret | 值 |
 |---|---|
-| `IMA_SMTP_HOST` | SMTP 服务器，QQ 邮箱填 `smtp.qq.com` |
-| `IMA_SMTP_PORT` | `465` |
-| `IMA_SMTP_USER` | 你的邮箱（二维码会发到这里） |
-| `IMA_SMTP_PASS` | SMTP 授权码，不是邮箱密码（QQ 邮箱：设置 → 账号 → POP3/SMTP 服务 → 生成授权码） |
+| `IMA_SMTP_HOST` | SMTP 服务器，QQ 邮箱填 `smtp.qq.com`，网易企业邮箱填 `smtphz.qiye.163.com`（华东）或 `smtp.qiye.163.com` |
+| `IMA_SMTP_PORT` | `465`（SSL） |
+| `IMA_SMTP_USER` | 发件邮箱（SMTP 认证账号） |
+| `IMA_SMTP_PASS` | SMTP 授权码，不是邮箱密码（QQ 邮箱：设置 → 账号 → POP3/SMTP 服务 → 生成授权码；网易企业邮箱：网页版设置 → 客户端设置 → 开启 SMTP 并生成授权码） |
+| `IMA_MAIL_TO` | 选填：二维码的收件邮箱。不填则发给 `IMA_SMTP_USER` 自己；填了就可以发件、收件用不同账号 |
+
+> 发件与收件分开时，`IMA_SMTP_USER` 配发件账号（含其认证授权码），`IMA_MAIL_TO` 配你想收二维码的邮箱——两者不必相同。
 
 ### 第 2 步：扫码授权
 
@@ -64,6 +67,12 @@ python ima_recover.py
 
 脚本在当前目录生成 `login_qr.png`，微信扫码后凭证写入 `credentials.json`。GitHub 环境请把该文件内容存入 Actions Cache 或 Secret（勿提交进仓库）。装了 ima 客户端的 Windows 机器也可以用 `python extract_credentials.py` 直接提取，效果相同。
 
+配好 SMTP 后想先验证发信是否正常，用这一条（不生成二维码、不消耗扫码）：
+
+```bash
+python ima_recover.py --test-mail --to you@example.com
+```
+
 ## 文件说明
 
 | 文件 | 说明 |
@@ -88,3 +97,16 @@ ima 的 access token 只有 2 小时寿命，长期凭证（refresh token）又�
 **凭证失效后怎么办？**
 
 凭证有效期由服务端控制。失效后「ima 每日签到」会失败并收到邮件提醒——重新执行部署方法的**第 2 步**（同一条工作流）即可，无需其他操作。
+
+**SMTP 配错了会怎样？**
+
+发件账号必须与 SMTP 服务器属于同一邮箱服务，混用会认证失败：
+
+| 发件邮箱 | `IMA_SMTP_HOST` | `IMA_SMTP_PORT` |
+|---|---|---|
+| QQ 邮箱 | `smtp.qq.com` | `465` |
+| 网易企业邮箱 | `smtphz.qiye.163.com`（华东）或 `smtp.qiye.163.com` | `465` |
+| 163 个人邮箱 | `smtp.163.com` | `465` |
+| Gmail | `smtp.gmail.com` | `465` |
+
+比如用 QQ 邮箱账号却配了 `smtphz.qiye.163.com`，认证会被拒。**邮件发不出去时工作流会立即失败并报出具体原因**（认证失败 / 域名解析失败 / 发件人被拒 / 端口协议不匹配），不会再空等扫码——云端拿不到二维码，等下去没有意义。收件人可以用 `IMA_MAIL_TO` 单独指定，不必等于发件账号。

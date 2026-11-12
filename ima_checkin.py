@@ -156,7 +156,9 @@ def refresh_access_token(cred):
     if data.get("code") != 0 or not token:
         sys.exit(
             "[错误] 刷新登录失败: code=%s msg=%s\n"
-            "refresh_token 可能已失效。请完全退出 ima 后运行 extract_credentials.py 重新提取。"
+            "凭证（refresh token）已失效，需要重新扫码授权：\n"
+            "  · GitHub Actions：运行「ima 凭证恢复（扫码）」工作流，邮箱收到二维码后微信扫一下即可；\n"
+            "  · 本地：运行 ima_recover.py 扫 login_qr.png；装了 ima 的 Windows 机器也可用 extract_credentials.py。"
             % (data.get("code"), data.get("msg"))
         )
     return token

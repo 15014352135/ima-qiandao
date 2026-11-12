@@ -35,6 +35,7 @@ import os
 import re
 import shutil
 import smtplib
+import socket
 import sys
 import time
 import urllib.error
@@ -184,14 +185,63 @@ def login_exchange(code, guid):
     }
 
 
-def send_mail(to, png_path):
+class MailError(RuntimeError):
+    """邮件发送失败。云端拿不到二维码就无法扫码，必须立即告知而不是继续等待。"""
+
+
+def _smtp_config():
     host = os.environ.get("IMA_SMTP_HOST")
-    port = int(os.environ.get("IMA_SMTP_PORT", "465"))
     user = os.environ.get("IMA_SMTP_USER")
     password = os.environ.get("IMA_SMTP_PASS")
+    port_raw = os.environ.get("IMA_SMTP_PORT", "465")
     if not (host and user and password):
-        print("      (未配置 IMA_SMTP_* 环境变量, 跳过邮件发送, 请直接查看 %s)" % png_path)
-        return
+        raise MailError("未配置 IMA_SMTP_HOST / IMA_SMTP_USER / IMA_SMTP_PASS，无法发送邮件")
+    try:
+        port = int(port_raw)
+    except ValueError:
+        raise MailError("IMA_SMTP_PORT 不是合法端口：%r" % port_raw)
+    return host, port, user, password
+
+
+def _deliver(msg, host, port, user, password):
+    """连接、认证并投递。所有失败都转成带诊断的 MailError。"""
+    smtp = None
+    try:
+        if port == 465:
+            smtp = smtplib.SMTP_SSL(host, port, timeout=20)
+        else:
+            smtp = smtplib.SMTP(host, port, timeout=20)
+            smtp.starttls()
+        smtp.login(user, password)
+        smtp.sendmail(user, [msg["To"]], msg.as_string())
+    except smtplib.SMTPAuthenticationError as exc:
+        detail = exc.smtp_error.decode("utf-8", "replace") if isinstance(exc.smtp_error, bytes) else str(exc.smtp_error)
+        raise MailError(
+            "SMTP 认证失败（%s %s）：发件账号 %s 与服务器 %s 不匹配，或授权码/密码错误。"
+            "确认用法：QQ 邮箱 → IMA_SMTP_HOST=smtp.qq.com；网易企业邮箱 → IMA_SMTP_HOST=smtphz.qiye.163.com "
+            "并发件账号必须是该企业邮箱地址" % (exc.smtp_code, detail.strip(), user, host)
+        )
+    except socket.gaierror:
+        raise MailError("无法解析 SMTP 服务器 %s，请检查 IMA_SMTP_HOST 拼写" % host)
+    except (smtplib.SMTPSenderRefused, smtplib.SMTPRecipientsRefused) as exc:
+        raise MailError("发件人或收件人被服务器拒绝：%s（发件账号必须属于该 SMTP 服务器域名）" % exc)
+    except (OSError, smtplib.SMTPException) as exc:
+        raise MailError(
+            "连接 %s:%s 发送邮件失败：%s\n"
+            "        排查顺序：① 端口（465 SSL / 587 STARTTLS）；② 发件账号必须属于该 SMTP 服务器"
+            "（QQ 邮箱配 smtp.qq.com，配 163 服务器会被断开）；③ 主机名是否可解析"
+            % (host, port, exc)
+        )
+    finally:
+        if smtp is not None:
+            try:
+                smtp.quit()
+            except Exception:
+                pass
+
+
+def send_mail(to, png_path):
+    host, port, user, password = _smtp_config()
     msg = MIMEMultipart()
     msg["Subject"] = "ima 登录二维码 - 请用微信扫码恢复自动签到"
     msg["From"] = user
@@ -201,27 +251,45 @@ def send_mail(to, png_path):
         img = MIMEImage(fp.read())
     img.add_header("Content-Disposition", "attachment", filename="ima_login_qr.png")
     msg.attach(img)
-    if port == 465:
-        smtp = smtplib.SMTP_SSL(host, port, timeout=20)
-    else:
-        smtp = smtplib.SMTP(host, port, timeout=20)
-        smtp.starttls()
-    try:
-        smtp.login(user, password)
-        smtp.sendmail(user, [to], msg.as_string())
-    finally:
-        smtp.quit()
-    print("      二维码已发送至 %s" % to)
+    _deliver(msg, host, port, user, password)
+    print("      二维码已发送至 %s（发件账号 %s @ %s）" % (to, user, host))
+
+
+def probe_mail(to):
+    """只验证 SMTP 配置：发一封纯文本测试邮件，不生成二维码、不消耗扫码次数。"""
+    host, port, user, password = _smtp_config()
+    msg = MIMEMultipart()
+    msg["Subject"] = "ima-qiandao SMTP 配置测试"
+    msg["From"] = user
+    msg["To"] = to
+    msg.attach(MIMEText("收到这封邮件说明 IMA_SMTP_HOST / IMA_SMTP_USER / IMA_SMTP_PASS 配置正确，二维码可以正常送达。", "plain", "utf-8"))
+    _deliver(msg, host, port, user, password)
+    print("SMTP 配置正确：测试邮件已由 %s（%s）发送至 %s" % (user, host, to))
 
 
 def main():
     parser = argparse.ArgumentParser(description="ima 凭证获取/恢复(微信扫码授权, 无需安装 ima 客户端)")
-    parser.add_argument("--to", help="接收二维码的邮箱(需配置 IMA_SMTP_* 环境变量)")
+    parser.add_argument(
+        "--to",
+        default=os.environ.get("IMA_MAIL_TO") or os.environ.get("IMA_SMTP_USER") or None,
+        help="接收二维码的邮箱；默认取环境变量 IMA_MAIL_TO，未配置则发给 IMA_SMTP_USER 自己",
+    )
+    parser.add_argument("--test-mail", action="store_true", help="只测试 SMTP 配置：发一封纯文本测试邮件后退出")
     parser.add_argument("--dry-run", action="store_true", help="只生成二维码, 不轮询不写回")
     parser.add_argument("--force", action="store_true", help="跳过'凭证还活着'检查, 强制重新扫码")
     parser.add_argument("--timeout", type=int, default=900, help="总轮询时限(秒), 默认 900")
     parser.add_argument("--guid", help="设备 GUID(默认沿用 credentials.json 中的值, 没有则自动生成)")
     args = parser.parse_args()
+
+    if args.test_mail:
+        target = args.to
+        if not target:
+            sys.exit("[错误] --test-mail 需要收件人：用 --to 指定，或配置 IMA_MAIL_TO / IMA_SMTP_USER")
+        try:
+            probe_mail(target)
+        except MailError as exc:
+            sys.exit("[错误] %s" % exc)
+        return 0
 
     if CRED_FILE.exists():
         with open(CRED_FILE, "r", encoding="utf-8") as fp:
@@ -258,8 +326,16 @@ def main():
         if args.to:
             try:
                 send_mail(args.to, str(QR_FILE))
-            except Exception as exc:
-                print("      邮件发送失败: %s" % exc)
+            except MailError as exc:
+                if os.environ.get("GITHUB_ACTIONS") == "true":
+                    sys.exit(
+                        "[错误] %s\n"
+                        "       二维码无法送达，已停止等待扫码——反正你也看不到它。\n"
+                        "       请修正 Secrets（IMA_SMTP_HOST / IMA_SMTP_USER / IMA_SMTP_PASS 三者必须属于同一邮箱服务）后重跑工作流。"
+                        % exc
+                    )
+                print("      [警告] %s" % exc)
+                print("      已跳过邮件，请手动打开 %s 扫码（脚本继续等待）" % QR_FILE.name)
         if args.dry_run:
             print("[dry-run] 已生成二维码, 不轮询。")
             return 0
